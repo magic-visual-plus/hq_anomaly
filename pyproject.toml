@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hq_anomaly"
+version = "0.1.0"
+description = "high quality image anomaly detection"
+authors = [
+    { name = "Xiaochuan Zou", email = "zouxiaochuan@163.com" }
+]
+license = { text = "MIT" }
+dependencies = [
+    "numpy",
+    "scipy",
+    "pydantic",
+    "tensorboard>2.4.1",,
+    "loguru",
+    "supervision",
+    "peft<=0.15.2",
+    "timm"
+]
+requires-python = ">=3.6"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hq_anomaly*"]
+exclude = ["tests"]
+
+[tool.setuptools.package-data]
+hq_det = ["**/*.yml", "*.yml"]
