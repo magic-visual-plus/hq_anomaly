@@ -14,7 +14,7 @@ dependencies = [
     "numpy",
     "scipy",
     "pydantic",
-    "tensorboard>2.4.1",,
+    "tensorboard>2.4.1",
     "loguru",
     "supervision",
     "peft<=0.15.2",
