@@ -3,7 +3,7 @@
 import torch.nn
 import timm
 import copy
-from vector_quantize_pytorch import VectorQuantize
+# from vector_quantize_pytorch import VectorQuantize
 import torch.distributed
 from functools import partial
 from timm.models.layers import LayerNorm
