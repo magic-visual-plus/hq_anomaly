@@ -4,11 +4,11 @@ import torch
 
 
 class MemoryBank(torch.nn.Module):
-    def __init__(self, size, max_size=100000, device="cuda:0"):
+    def __init__(self, size, dim=768, max_size=100000, device="cuda:0"):
         super().__init__()
         self.max_size = max_size
         self.size = size
-        self.register_buffer("memory_bank", torch.zeros((size, 768), dtype=torch.float32))
+        self.register_buffer("memory_bank", torch.zeros((size, dim), dtype=torch.float32))
         self.register_buffer("dist_mean", torch.tensor(0.0))
         self.register_buffer("dist_std", torch.tensor(1.0))
         self.min_dist = 0

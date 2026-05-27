@@ -8,13 +8,13 @@ from hq_anomaly import models
 import sys
 from tqdm import tqdm
 import numpy as np
-from . import valid_patchcore
-from .datasets import ImageSingleFolder
+from hq_anomaly import valid_patchcore
+from hq_anomaly.datasets import ImageSingleFolder
 
 
 def create_model(config: common.ModelConfig) -> torch.nn.Module:
     # model = models.AutoEncoderViT()
-    model = models.ViTPatchcore(model_config=config)
+    model = models.ViTPatchcore(model_config=config, layer_indices=[1])
     return model
 
 def train(config: common.TrainConfig):
@@ -70,14 +70,15 @@ def train(config: common.TrainConfig):
             pass
         model.shrink_memory(i_epoch)
         pass
+    # model.load("output/ckpt.pth")
     
-    middle_dist, accuracy, f1_score, precision, recall, precision_recall_curve = valid_patchcore.valid(model, folder=valid_path)
-    model.set_middle_distance(middle_dist)
+    dist_stats, confidence, accuracy, f1_score, precision, recall, precision_recall_curve = valid_patchcore.valid(model, folder=valid_path)
+    model.set_distance_stats(dist_stats)
 
     model.save(os.path.join(config.output_path, "ckpt.pth"))
-    print(f"middle_dist: {middle_dist}, accuracy: {accuracy}, f1_score: {f1_score}, precision: {precision}, recall: {recall}")
+    print(f"middle_dist: {dist_stats}, accuracy: {accuracy}, f1_score: {f1_score}, precision: {precision}, recall: {recall}")
     results_filename = os.path.join(config.output_path, "results.csv")
-    confidence = 0.5
+
     with open(results_filename, 'w') as fout:
         # write header
         fout.write("confidence,accuracy,f1_score,precision,recall\n")

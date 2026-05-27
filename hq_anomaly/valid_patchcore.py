@@ -38,15 +38,23 @@ def valid(model: ViTPatchcore, folder: str):
     # find minimal probability for ng images
     ng_dist = [dists[i] for i in range(len(dists)) if ground_truths[i] == 1]
     min_ng_dist = np.min(ng_dist)
+    max_ng_dist = np.max(ng_dist)
     # find dist that smaller min_ng_dist
     max_ok_dist = np.max(
         [dists[i] for i in range(len(dists)) if ground_truths[i] == 0 and dists[i] < min_ng_dist])
     middle_dist = 0.5 * (min_ng_dist + max_ok_dist)
     
-    predict_labels = np.asarray([1 if p > middle_dist else 0 for p in dists])
-    predict_scores = np.asarray(dists)
+    predict_scores = model.distance2proba((middle_dist, max_ng_dist), np.asarray(dists))
 
     # calculate accuracy, f1_score, precision, recall
+    precisions, recalls, thresholds = sklearn.metrics.precision_recall_curve(ground_truths, predict_scores)
+    f1 = 2 * (precisions * recalls) / (precisions + recalls + 1e-8)
+    
+    max_f1_idx = np.argmax(f1)
+    confidence = thresholds[max_f1_idx]
+
+    predict_labels = [1 if score >= confidence else 0 for score in predict_scores]
+
     accuracy = sklearn.metrics.accuracy_score(ground_truths, predict_labels)
     f1_score = sklearn.metrics.f1_score(ground_truths, predict_labels)
     precision = sklearn.metrics.precision_score(ground_truths, predict_labels)
@@ -54,7 +62,7 @@ def valid(model: ViTPatchcore, folder: str):
 
     precision_curve, recall_curve, _ = sklearn.metrics.precision_recall_curve(ground_truths, predict_scores)
 
-    return middle_dist, accuracy, f1_score, precision, recall, (precision_curve, recall_curve)
+    return (middle_dist, max_ng_dist), confidence, accuracy, f1_score, precision, recall, (precision_curve, recall_curve)
 
 if __name__ == "__main__":
     pass

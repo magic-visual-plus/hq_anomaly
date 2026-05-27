@@ -540,8 +540,10 @@ class ViTPatchcore(torch.nn.Module):
     def __init__(
             self, model_config: common.ModelConfig = None,
             backbone_name: str = "vit_base_patch16_dinov3.lvd1689m",
-            layer_indices = [-1,-3,-4,-6,-9,-11]
-            # layer_indices = [-1]
+            # backbone_name: str = "vit_small_patch16_dinov3.lvd1689m",
+            layer_indices = [-1,-3,-4,-6,-9,-11],
+            # layer_indices = [1],
+            memory_size=20000,
             ):
         super().__init__()
         if model_config is not None:
@@ -549,17 +551,25 @@ class ViTPatchcore(torch.nn.Module):
             if len(model_config.checkpoint_path) > 0:
                 self.backbone = timm.create_model(
                     backbone_name, pretrained=False, num_classes=0)
+                data = torch.load(model_config.checkpoint_path, weights_only=False)
+                self.image_size = data.get("image_size", self.image_size)
+                self.layer_indices = data.get("layer_indices", layer_indices)
+                self.memory_size = data.get("memory_size", memory_size) 
             else:
                 self.backbone = timm.create_model(
                     backbone_name, pretrained=True, num_classes=0)
+                self.image_size = model_config.image_size
+                self.layer_indices = layer_indices
+                self.memory_size = memory_size
                 pass
             pass
 
-        self.layer_indices = layer_indices
+        dim = self.backbone.num_features
         self.memories = torch.nn.ModuleList(
-            [MemoryBank(size=20000, max_size=3000000) for _ in layer_indices]
+            [MemoryBank(size=self.memory_size, dim=dim, max_size=3000000) for _ in layer_indices]
         )
         self.register_buffer("middle_distance", torch.tensor(0.5))
+        self.register_buffer("scale_distance", torch.tensor(1.0))
         self.backbone.requires_grad_(False)
         self.backbone.eval()
         if len(model_config.checkpoint_path) > 0:
@@ -627,7 +637,7 @@ class ViTPatchcore(torch.nn.Module):
     def postprocess(self, forward_result):
         max_dist = self.compute_distance(forward_result)
         # use sigmoid
-        proba = torch.sigmoid((max_dist - self.middle_distance)* 2)
+        proba = torch.sigmoid((max_dist - self.middle_distance) * self.scale_distance)
         
         return proba
 
@@ -651,9 +661,20 @@ class ViTPatchcore(torch.nn.Module):
         return batch
         pass
 
-    def set_middle_distance(self, distance):
-        self.middle_distance.copy_(torch.tensor(distance))
+    def set_distance_stats(self, stats):
+        middle_dist, max_dist = stats
+        # max_dist should have the probability of 0.95
+        # compute the scale of sigmoid((d-middle_dist) * scale) = 0.95
+        scale = - torch.log(torch.tensor(0.05)) / (max_dist - middle_dist)
+        self.middle_distance.copy_(torch.tensor(middle_dist))
+        self.scale_distance.copy_(torch.tensor(scale))
         pass
+
+    def distance2proba(self, stats, dists):
+        middle_dist, max_dist = stats
+        scale = - np.log(0.05) / (max_dist - middle_dist)
+        proba = 1 / (1 + np.exp(-(dists - middle_dist) * scale))
+        return proba
 
     def set_middle_probability(self, proba):
         dist = torch.sqrt(self.middle_distance * ((1 - proba) / proba))
@@ -663,7 +684,8 @@ class ViTPatchcore(torch.nn.Module):
     def generate_heatmap(self, proba: np.array, img: np.array):
         # convert map of probability to visualizable heatmap
         heatmap = (proba * 255).astype(np.uint8)
-        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_RAINBOW)
         
         heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
         heatmap = cv2.addWeighted(img, 0.5, heatmap, 0.5, 0)
@@ -693,9 +715,10 @@ class ViTPatchcore(torch.nn.Module):
         results = []
         for original_size, pred in zip(original_sizes, preds):
             pred = pred.cpu().numpy()
+            pred = pred.reshape(32, 32)
+
             pred = cv2.resize(
-                pred, (original_size[1], original_size[0]),
-                interpolation=cv2.INTER_NEAREST)
+                pred, (original_size[1], original_size[0]))
             prediction = common.PredictionResult(score=pred)
             results.append(prediction)
             pass
@@ -721,6 +744,8 @@ class ViTPatchcore(torch.nn.Module):
         torch.save({
             "state_dict": state_dict,
             "image_size": image_size,
+            "layer_indices": self.layer_indices,
+            "memory_size": self.memory_size,
         }, checkpoint_path)
         pass
 
@@ -728,12 +753,26 @@ class ViTPatchcore(torch.nn.Module):
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
         if "state_dict" in checkpoint:
             state_dict = checkpoint["state_dict"]
-            self.load_state_dict(state_dict)
-            self.image_size = checkpoint["image_size"]
+            self.load_state_dict(state_dict, strict=True)
             pass
         else:
             # according to old version, directly load state dict
             self.load_state_dict(checkpoint)
+            pass
+        pass
+
+    def train(self, mode=True):
+        if mode:
+            self.backbone.eval()
+            for memory in self.memories:
+                memory.train()
+                pass
+            pass
+        else:
+            self.backbone.eval()
+            for memory in self.memories:
+                memory.eval()
+                pass
             pass
         pass
     pass
