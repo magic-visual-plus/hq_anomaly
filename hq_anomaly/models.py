@@ -541,24 +541,24 @@ class ViTPatchcore(torch.nn.Module):
             self, model_config: common.ModelConfig = None,
             backbone_name: str = "vit_base_patch16_dinov3.lvd1689m",
             # backbone_name: str = "vit_small_patch16_dinov3.lvd1689m",
-            layer_indices = [-1,-3,-4,-6,-9,-11],
             # layer_indices = [1],
             memory_size=20000,
             ):
         super().__init__()
         if model_config is not None:
-            self.image_size = model_config.image_size
+            image_size = model_config.image_size
+            layer_indices = model_config.layer_indices
             if len(model_config.checkpoint_path) > 0:
                 self.backbone = timm.create_model(
                     backbone_name, pretrained=False, num_classes=0)
                 data = torch.load(model_config.checkpoint_path, weights_only=False)
-                self.image_size = data.get("image_size", self.image_size)
+                self.image_size = data.get("image_size", image_size)
                 self.layer_indices = data.get("layer_indices", layer_indices)
                 self.memory_size = data.get("memory_size", memory_size) 
             else:
                 self.backbone = timm.create_model(
                     backbone_name, pretrained=True, num_classes=0)
-                self.image_size = model_config.image_size
+                self.image_size = image_size
                 self.layer_indices = layer_indices
                 self.memory_size = memory_size
                 pass

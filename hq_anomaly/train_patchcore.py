@@ -14,7 +14,7 @@ from hq_anomaly.datasets import ImageSingleFolder
 
 def create_model(config: common.ModelConfig) -> torch.nn.Module:
     # model = models.AutoEncoderViT()
-    model = models.ViTPatchcore(model_config=config, layer_indices=[1])
+    model = models.ViTPatchcore(model_config=config)
     return model
 
 def train(config: common.TrainConfig):
