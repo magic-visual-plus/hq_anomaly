@@ -566,7 +566,7 @@ class ViTPatchcore(torch.nn.Module):
 
         dim = self.backbone.num_features
         self.memories = torch.nn.ModuleList(
-            [MemoryBank(size=self.memory_size, dim=dim, max_size=3000000) for _ in layer_indices]
+            [MemoryBank(size=self.memory_size, dim=dim, max_size=3000000) for _ in self.layer_indices]
         )
         self.register_buffer("middle_distance", torch.tensor(0.5))
         self.register_buffer("scale_distance", torch.tensor(1.0))
