@@ -45,9 +45,9 @@ class KCenterGreedy:
         torch.Size([219, 1536])
     """
 
-    def __init__(self, embedding: torch.Tensor, sampling_ratio: float) -> None:
+    def __init__(self, embedding: torch.Tensor, size: int) -> None:
         self.embedding = embedding
-        self.coreset_size = int(embedding.shape[0] * sampling_ratio)
+        self.coreset_size = size
         self.model = None
 
         self.features: torch.Tensor

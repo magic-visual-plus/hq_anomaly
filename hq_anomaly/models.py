@@ -542,12 +542,12 @@ class ViTPatchcore(torch.nn.Module):
             backbone_name: str = "vit_base_patch16_dinov3.lvd1689m",
             # backbone_name: str = "vit_small_patch16_dinov3.lvd1689m",
             # layer_indices = [1],
-            memory_size=20000,
             ):
         super().__init__()
         if model_config is not None:
             image_size = model_config.image_size
             layer_indices = model_config.layer_indices
+            memory_size = model_config.memory_size
             if len(model_config.checkpoint_path) > 0:
                 self.backbone = timm.create_model(
                     backbone_name, pretrained=False, num_classes=0)
@@ -615,7 +615,296 @@ class ViTPatchcore(torch.nn.Module):
         self.memories[memory_index].shrink()
         pass
 
-    def compute_distance(self, forward_result):
+    def compute_distance(self, forward_result, num_neighbours=1):
+        intermediates = forward_result
+        dists = []
+        indices = []
+        for i, ilayer in enumerate(self.layer_indices):
+            embeddings = intermediates[ilayer]
+            bsize = embeddings.shape[0]
+
+            embeddings = embeddings.reshape(-1, embeddings.shape[-1])
+            # embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=-1)
+            dist, idx = self.memories[i].compute_min_distance(embeddings)
+            # dist = (dist - self.memories[i].dist_mean) / (self.memories[i].dist_std + 1e-8)
+
+            dist = dist.reshape((bsize, -1))
+            idx = idx.reshape((bsize, -1))
+            dists.append(dist)
+            indices.append(idx)
+            pass
+
+        max_dist, idx_max_dist = torch.max(torch.stack(dists, dim=0), dim=0)
+        # max_dist: [batch, num_patches], idx_max_dist: [batch, num_patches]
+        max_indices = torch.stack(indices, dim=0)
+        max_indices = max_indices[idx_max_dist, torch.arange(idx_max_dist.shape[0]).unsqueeze(-1), torch.arange(idx_max_dist.shape[1]).unsqueeze(0)]
+        
+        return max_dist, max_indices
+
+    def postprocess(self, forward_result, num_neighbours=1):
+        max_dist, max_idx = self.compute_distance(forward_result)
+        score = self.compute_anomaly_score(forward_result, max_dist, max_idx, num_neighbours=9)
+        score = torch.sigmoid((score - self.middle_distance) * self.scale_distance)
+        # use sigmoid
+        # proba = torch.sigmoid((max_dist - self.middle_distance) * self.scale_distance)
+        min_max_dist = max_dist.min(dim=-1, keepdim=True)[0]
+        max_max_dist = max_dist.max(dim=-1, keepdim=True)[0]
+        proba = (max_dist - min_max_dist) / (max_max_dist - min_max_dist + 1e-8)
+
+        return proba, score
+
+    def compute_anomaly_score(self, intermediates, dists, indices, num_neighbours=9):
+        # compute the anomaly score for each image in the batch
+        batch_size = dists.shape[0]
+        # find max idx
+        max_idx = torch.argmax(dists, dim=1)
+        # max_idx: [batch_size]
+        max_indices = indices[torch.arange(batch_size), max_idx]
+        # max_indices: [batch_size]
+        max_memory = self.memories[0].memory_bank[max_indices]
+        support_samples = self.memories[0].get_topk_sample(max_memory, k=num_neighbours)
+        # support_samples: [B, K, D]
+
+        # compute the distance between the max embedding and the support samples
+        max_embedding = intermediates[0][torch.arange(batch_size), max_idx]
+        # max_embedding: [B, D]
+        
+        # compute distance between embedding and support samples
+        support_dists = torch.cdist(max_embedding.unsqueeze(1), support_samples, p=2)
+        # support_dists: [B, 1, K]
+        support_dists = support_dists.squeeze(1)
+
+        # do softmax
+        support_weights = (1 - torch.softmax(support_dists, dim=1))[..., 0]
+        # support_weights: [B, 1]
+
+        score = dists[torch.arange(batch_size), max_idx] * support_weights
+
+        return score
+
+    def get_default_transforms(self):
+        transforms = torchvision.transforms.v2.Compose([
+            torchvision.transforms.v2.ToPILImage(),
+            torchvision.transforms.v2.Resize((self.image_size, self.image_size)),
+            torchvision.transforms.v2.GaussianBlur(kernel_size=3, sigma=1.0),
+            torchvision.transforms.v2.ToTensor(),
+            torchvision.transforms.v2.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225]),
+        ])
+        return transforms
+    
+    def imgs2batch(self, imgs: List[np.ndarray]) -> torch.Tensor:
+        transforms = self.get_default_transforms()
+
+        imgs = [transforms(img) for img in imgs]
+        batch = torch.stack(imgs, dim=0)
+        return batch
+        pass
+
+    def set_distance_stats(self, stats):
+        middle_dist, max_dist = stats
+        # max_dist should have the probability of 0.95
+        # compute the scale of sigmoid((d-middle_dist) * scale) = 0.95
+        scale = - torch.log(torch.tensor(0.05)) / (max_dist - middle_dist)
+        self.middle_distance.copy_(torch.tensor(middle_dist))
+        self.scale_distance.copy_(torch.tensor(scale))
+        pass
+
+    def distance2proba(self, stats, dists):
+        middle_dist, max_dist = stats
+        scale = - np.log(0.05) / (max_dist - middle_dist)
+        proba = 1 / (1 + np.exp(-(dists - middle_dist) * scale))
+        return proba
+
+    def set_middle_probability(self, proba):
+        dist = torch.sqrt(self.middle_distance * ((1 - proba) / proba))
+        self.set_middle_distance(dist)
+        pass
+
+    def generate_heatmap(self, proba: np.array, img: np.array):
+        # convert map of probability to visualizable heatmap
+        heatmap = (proba * 255).astype(np.uint8)
+
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_RAINBOW)
+        
+        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+        heatmap = cv2.addWeighted(img, 0.5, heatmap, 0.5, 0)
+
+        return heatmap
+
+
+    def predict(
+            self, imgs: List[np.ndarray], is_bgr=True,
+            return_heatmap=False, num_neighbours=1) -> List[common.PredictionResult]:
+        if is_bgr:
+            for i in range(len(imgs)):
+                imgs[i] = cv2.cvtColor(imgs[i], cv2.COLOR_BGR2RGB)
+                pass
+            pass
+        
+        original_sizes = [img.shape[:2] for img in imgs]
+
+        batch = self.imgs2batch(imgs)
+        batch = batch.to(self.device)
+        with torch.no_grad():
+            forward_result = self.forward(batch)
+            preds, scores = self.postprocess(forward_result, num_neighbours=num_neighbours)
+            pass
+        # pred: [B, E, E, 1]
+        preds = preds.squeeze(-1)
+        results = []
+        for original_size, pred, score in zip(original_sizes, preds, scores):
+            pred = pred.cpu().numpy()
+            score = score.cpu().numpy()
+            pred = pred.reshape(32, 32)
+
+            pred = cv2.resize(
+                pred, (original_size[1], original_size[0]))
+            prediction = common.PredictionResult(score=score)
+            results.append(prediction)
+            pass
+        
+        if return_heatmap:
+            for i in range(len(results)):
+                pred = preds[i].cpu().numpy()
+                pred = pred.reshape(32, 32)
+                pred = cv2.resize(
+                    pred, (original_sizes[i][1], original_sizes[i][0]))
+                results[i].heat_map = self.generate_heatmap(
+                    pred, imgs[i])
+                pass
+            
+        return results
+
+
+    def compute_stats(self, ):
+        for memory in self.memories:
+            memory.compute_stats()
+            pass
+        pass
+
+    def save(self, checkpoint_path):
+        state_dict = self.state_dict()
+        image_size = self.image_size
+        torch.save({
+            "state_dict": state_dict,
+            "image_size": image_size,
+            "layer_indices": self.layer_indices,
+            "memory_size": self.memory_size,
+        }, checkpoint_path)
+        pass
+
+    def load(self, checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        if "state_dict" in checkpoint:
+            state_dict = checkpoint["state_dict"]
+            self.load_state_dict(state_dict, strict=True)
+            pass
+        else:
+            # according to old version, directly load state dict
+            self.load_state_dict(checkpoint)
+            pass
+        pass
+
+    def train(self, mode=True):
+        if mode:
+            self.backbone.eval()
+            for memory in self.memories:
+                memory.train()
+                pass
+            pass
+        else:
+            self.backbone.eval()
+            for memory in self.memories:
+                memory.eval()
+                pass
+            pass
+        pass
+    pass
+
+
+class ViTPatchcore2(torch.nn.Module):
+    def __init__(
+            self, model_config: common.ModelConfig = None,
+            backbone_name: str = "vit_base_patch16_dinov3.lvd1689m",
+            # backbone_name: str = "vit_small_patch16_dinov3.lvd1689m",
+            # layer_indices = [1],
+            ):
+        super().__init__()
+        if model_config is not None:
+            image_size = model_config.image_size
+            layer_indices = model_config.layer_indices
+            memory_size = model_config.memory_size
+            if len(model_config.checkpoint_path) > 0:
+                self.backbone = timm.create_model(
+                    backbone_name, pretrained=False, num_classes=0)
+                data = torch.load(model_config.checkpoint_path, weights_only=False)
+                self.image_size = data.get("image_size", image_size)
+                self.layer_indices = data.get("layer_indices", layer_indices)
+                self.memory_size = data.get("memory_size", memory_size) 
+            else:
+                self.backbone = timm.create_model(
+                    backbone_name, pretrained=True, num_classes=0)
+                self.image_size = image_size
+                self.layer_indices = layer_indices
+                self.memory_size = memory_size
+                pass
+            pass
+
+        dim = self.backbone.num_features
+        self.memories = torch.nn.ModuleList(
+            [MemoryBank(size=self.memory_size, dim=dim, max_size=3000000) for _ in self.layer_indices]
+        )
+        self.register_buffer("middle_distance", torch.tensor(0.5))
+        self.register_buffer("scale_distance", torch.tensor(1.0))
+        self.backbone.requires_grad_(False)
+        self.backbone.eval()
+        if len(model_config.checkpoint_path) > 0:
+            self.load(model_config.checkpoint_path)
+            pass
+
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.to(self.device)
+
+    def to(self, device):
+        super().to(device)
+        self.device = device
+        pass
+
+    def forward_backbone(self, x: torch.Tensor) -> torch.Tensor:
+        # forward pass
+        intermediates = self.backbone.forward_intermediates(x)[1]
+        
+        intermediates = [
+            emb.permute(0, 2, 3, 1).reshape(emb.shape[0], -1, emb.shape[1]) for emb in intermediates
+        ]
+
+        return intermediates
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        with torch.no_grad():
+            intermediates  = self.forward_backbone(x)
+            pass
+
+        return intermediates
+        pass
+    
+    def compute_loss(self, forward_result, memory_index):
+        intermediates = forward_result
+        layer_index = self.layer_indices[memory_index]
+        embeddings = intermediates[layer_index]
+        embeddings = embeddings.reshape(-1, embeddings.shape[-1])
+        # embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=-1)
+        self.memories[memory_index].update(embeddings)
+        pass
+
+    def shrink_memory(self, memory_index):
+        self.memories[memory_index].shrink()
+        pass
+
+    def compute_distance(self, forward_result, num_neighbours=1):
+        idxs = None
         intermediates = forward_result
         dists = []
         for i, ilayer in enumerate(self.layer_indices):
@@ -624,7 +913,7 @@ class ViTPatchcore(torch.nn.Module):
 
             embeddings = embeddings.reshape(-1, embeddings.shape[-1])
             # embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=-1)
-            dist = self.memories[i].compute_min_distance(embeddings)
+            dist, _ = self.memories[i].compute_min_distance(embeddings)
             # dist = (dist - self.memories[i].dist_mean) / (self.memories[i].dist_std + 1e-8)
 
             dist = dist.reshape((bsize, -1))
@@ -634,10 +923,14 @@ class ViTPatchcore(torch.nn.Module):
         max_dist = torch.max(torch.stack(dists, dim=0), dim=0)[0]
         return max_dist
 
-    def postprocess(self, forward_result):
-        max_dist = self.compute_distance(forward_result)
+    def postprocess(self, forward_result, num_neighbours=1):
+        max_dist = self.compute_distance(forward_result, num_neighbours=num_neighbours)
         # use sigmoid
-        proba = torch.sigmoid((max_dist - self.middle_distance) * self.scale_distance)
+        # proba = torch.sigmoid((max_dist - self.middle_distance) * self.scale_distance)
+
+        max_max_dist = max_dist.max(dim=0, keepdim=True)[0]
+        min_max_dist = max_dist.min(dim=0, keepdim=True)[0]
+        proba = (max_dist - min_max_dist) / (max_max_dist - min_max_dist)
         
         return proba
 
@@ -695,7 +988,7 @@ class ViTPatchcore(torch.nn.Module):
 
     def predict(
             self, imgs: List[np.ndarray], is_bgr=True,
-            return_heatmap=False) -> List[common.PredictionResult]:
+            return_heatmap=False, num_neighbours=1) -> List[common.PredictionResult]:
         if is_bgr:
             for i in range(len(imgs)):
                 imgs[i] = cv2.cvtColor(imgs[i], cv2.COLOR_BGR2RGB)
@@ -708,7 +1001,7 @@ class ViTPatchcore(torch.nn.Module):
         batch = batch.to(self.device)
         with torch.no_grad():
             forward_result = self.forward(batch)
-            preds = self.postprocess(forward_result)
+            preds = self.postprocess(forward_result, num_neighbours=num_neighbours)
             pass
         # pred: [B, E, E, 1]
         preds = preds.squeeze(-1)

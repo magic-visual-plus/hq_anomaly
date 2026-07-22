@@ -8,6 +8,7 @@ class ModelConfig(pydantic.BaseModel):
     image_size: int = 512
     checkpoint_path: str = ""
     layer_indices: Optional[List[int]] = [-1,-3,-4,-6,-9,-11]
+    memory_size: int = 20000
 
     pass
 

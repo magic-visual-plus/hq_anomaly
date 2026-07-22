@@ -1,11 +1,12 @@
 
 import torchvision.datasets
 import torch
-from . import common
-from .models import ViTPatchcore
+from hq_anomaly import common
+from hq_anomaly.models import ViTPatchcore
 from tqdm import tqdm
 import sklearn.metrics
 import numpy as np
+import sys
 
 
 def valid(model: ViTPatchcore, folder: str):
@@ -23,15 +24,17 @@ def valid(model: ViTPatchcore, folder: str):
 
     ground_truths = []
     dists = []
+
     for i, (images, labels) in enumerate(tqdm(valid_loader)):
         label_names = [valid_dataset.classes[label] for label in labels]
         with torch.no_grad():
             images = images.to(model.device)
             preds = model.forward(images)
-            dist = model.compute_distance(preds)
+            dist, idx = model.compute_distance(preds)
+            scores = model.compute_anomaly_score(preds, dist, idx, num_neighbours=9)
             pass
         ground_truths.extend(label_names)
-        dists.extend([d.cpu().numpy().max() for d in dist])
+        dists.extend([d.cpu().numpy() for d in scores])
         pass
     
     ground_truths = [1 if gt != "good" else 0 for gt in ground_truths]
@@ -62,7 +65,15 @@ def valid(model: ViTPatchcore, folder: str):
 
     precision_curve, recall_curve, _ = sklearn.metrics.precision_recall_curve(ground_truths, predict_scores)
 
-    return (middle_dist, max_ng_dist), confidence, accuracy, f1_score, precision, recall, (precision_curve, recall_curve)
+    returns = (middle_dist, max_ng_dist), confidence, accuracy, f1_score, precision, recall, (precision_curve, recall_curve)
+    print(returns)
+    return returns
 
 if __name__ == "__main__":
+    model = ViTPatchcore(
+        model_config=common.ModelConfig(
+            checkpoint_path=sys.argv[1]
+        )
+    )
+    valid(model, sys.argv[2])
     pass

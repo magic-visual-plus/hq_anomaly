@@ -4,7 +4,7 @@ import torch
 
 
 class MemoryBank(torch.nn.Module):
-    def __init__(self, size, dim=768, max_size=100000, device="cuda:0"):
+    def __init__(self, size, dim=768, max_size=1000000, device="cuda:0"):
         super().__init__()
         self.max_size = max_size
         self.size = size
@@ -35,9 +35,17 @@ class MemoryBank(torch.nn.Module):
         self.memories = []
         self.memory_bank = self.memory_bank.to(device=self.device)
         r = self.size / self.memory_bank.shape[0]
-        sampler = KCenterGreedy(embedding=self.memory_bank, sampling_ratio=r)
-        with torch.no_grad():
-            self.memory_bank = sampler.sample_coreset().to(dtype=torch.float32)
+        if r < 1:
+            sampler = KCenterGreedy(embedding=self.memory_bank, size=self.size)
+            with torch.no_grad():
+                self.memory_bank = sampler.sample_coreset().to(dtype=torch.float32)
+                pass
+            pass
+        else:
+            while self.memory_bank.shape[0] < self.size:
+                self.memory_bank = torch.cat([self.memory_bank, self.memory_bank], dim=0)
+                pass
+            self.memory_bank = self.memory_bank[:self.size]
             pass
         pass
 
@@ -61,17 +69,35 @@ class MemoryBank(torch.nn.Module):
     def compute_min_distance(self, embeddings):
         batch_size = 8
         dists = []
+        indices = []
         embeddings = embeddings.to(dtype=self.memory_bank.dtype)
         for i in range(0, embeddings.shape[0], batch_size):
             batch_embeddings = embeddings[i:i+batch_size]
             # dist = torch.norm(batch_embeddings[:, None, :] - self.memory_bank[None, :, :], dim=-1)
             dist = torch.cdist(batch_embeddings, self.memory_bank, compute_mode="donot_use_mm_for_euclid_dist")
-            dist = torch.min(dist, dim=1)[0]
+            dist, idx = torch.min(dist, dim=1)
+
             dists.append(dist)
+            indices.append(idx)
             pass
 
-        return torch.cat(dists, dim=0)
+        return torch.cat(dists, dim=0), torch.cat(indices, dim=0)
         pass
+
+
+    def get_topk_sample(self, embeddings, k=10):
+        batch_size = 8
+        indices = []
+        embeddings = embeddings.to(dtype=self.memory_bank.dtype)
+        for i in range(0, embeddings.shape[0], batch_size):
+            batch_embeddings = embeddings[i:i+batch_size]
+            dist = torch.cdist(batch_embeddings, self.memory_bank, compute_mode="donot_use_mm_for_euclid_dist")
+            _, idx = torch.topk(dist, k=k, dim=1, largest=False)
+            indices.append(idx)
+            pass
+
+        indices = torch.cat(indices, dim=0)
+        return self.memory_bank[indices]
 
 
     def compute_self_min_dinstance(self, ):
