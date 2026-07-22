@@ -14,6 +14,7 @@ import cv2
 import torch
 from . import common
 import torchvision.transforms.v2
+import math
 
 
 class AutoEncoderViT(torch.nn.Module):
@@ -754,10 +755,12 @@ class ViTPatchcore(torch.nn.Module):
         # pred: [B, E, E, 1]
         preds = preds.squeeze(-1)
         results = []
+        embedding_h = int(math.sqrt(preds.shape[1]))
+        assert embedding_h * embedding_h == preds.shape[1], "Embedding size is not a perfect square"
         for original_size, pred, score in zip(original_sizes, preds, scores):
             pred = pred.cpu().numpy()
             score = score.cpu().numpy()
-            pred = pred.reshape(32, 32)
+            pred = pred.reshape(embedding_h, embedding_h)
 
             pred = cv2.resize(
                 pred, (original_size[1], original_size[0]))
@@ -768,7 +771,7 @@ class ViTPatchcore(torch.nn.Module):
         if return_heatmap:
             for i in range(len(results)):
                 pred = preds[i].cpu().numpy()
-                pred = pred.reshape(32, 32)
+                pred = pred.reshape(embedding_h, embedding_h)
                 pred = cv2.resize(
                     pred, (original_sizes[i][1], original_sizes[i][0]))
                 results[i].heat_map = self.generate_heatmap(
