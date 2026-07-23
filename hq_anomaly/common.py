@@ -9,6 +9,8 @@ class ModelConfig(pydantic.BaseModel):
     checkpoint_path: str = ""
     layer_indices: Optional[List[int]] = [-1,-3,-4,-6,-9,-11]
     memory_size: int = 20000
+    backbone_name: str = "vit_base_patch16_dinov3.lvd1689m"
+    # backbone_name: str = "vit_base_patch14_dinov2.lvd142m"
 
     pass
 

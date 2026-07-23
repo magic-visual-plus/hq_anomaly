@@ -621,7 +621,6 @@ class DistillViT2(torch.nn.Module):
 class ViTPatchcore(torch.nn.Module):
     def __init__(
             self, model_config: common.ModelConfig = None,
-            backbone_name: str = "vit_base_patch16_dinov3.lvd1689m",
             # backbone_name: str = "vit_small_patch16_dinov3.lvd1689m",
             # layer_indices = [1],
             ):
@@ -630,19 +629,26 @@ class ViTPatchcore(torch.nn.Module):
             image_size = model_config.image_size
             layer_indices = model_config.layer_indices
             memory_size = model_config.memory_size
+            backbone_name = model_config.backbone_name
+    
             if len(model_config.checkpoint_path) > 0:
-                self.backbone = timm.create_model(
-                    backbone_name, pretrained=False, num_classes=0)
                 data = torch.load(model_config.checkpoint_path, weights_only=False)
                 self.image_size = data.get("image_size", image_size)
                 self.layer_indices = data.get("layer_indices", layer_indices)
-                self.memory_size = data.get("memory_size", memory_size) 
-            else:
+                self.memory_size = data.get("memory_size", memory_size)
+                self.backbone_name = data.get("backbone_name", backbone_name)
                 self.backbone = timm.create_model(
-                    backbone_name, pretrained=True, num_classes=0)
+                    self.backbone_name, pretrained=False, num_classes=0, dynamic_img_size=True)
+            else:
+                print(backbone_name)
+                self.backbone = timm.create_model(
+                    backbone_name, pretrained=True, num_classes=0, dynamic_img_size=True)
+                # print(self.state_dict().keys())
+                # exit(-1)
                 self.image_size = image_size
                 self.layer_indices = layer_indices
                 self.memory_size = memory_size
+                self.backbone_name = backbone_name
                 pass
             pass
 
@@ -759,7 +765,7 @@ class ViTPatchcore(torch.nn.Module):
         # support_samples: [B, K, D]
 
         # compute the distance between the max embedding and the support samples
-        max_embedding = intermediates[0][torch.arange(batch_size), max_idx]
+        max_embedding = intermediates[self.layer_indices[0]][torch.arange(batch_size), max_idx]
         # max_embedding: [B, D]
         
         # compute distance between embedding and support samples
@@ -779,7 +785,7 @@ class ViTPatchcore(torch.nn.Module):
         transforms = torchvision.transforms.v2.Compose([
             torchvision.transforms.v2.ToPILImage(),
             torchvision.transforms.v2.Resize((self.image_size, self.image_size)),
-            NormalizeContrast(),
+            # NormalizeContrast(),
             torchvision.transforms.v2.GaussianBlur(kernel_size=5, sigma=1.0),
             torchvision.transforms.v2.ToTensor(),
             torchvision.transforms.v2.Normalize(
@@ -888,6 +894,7 @@ class ViTPatchcore(torch.nn.Module):
             "image_size": image_size,
             "layer_indices": self.layer_indices,
             "memory_size": self.memory_size,
+            "backbone_name": self.backbone_name,
         }, checkpoint_path)
         pass
 
@@ -1135,6 +1142,7 @@ class ViTPatchcore2(torch.nn.Module):
             "image_size": image_size,
             "layer_indices": self.layer_indices,
             "memory_size": self.memory_size,
+            "backbone_name": self.backbone_name,
         }, checkpoint_path)
         pass
 
