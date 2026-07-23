@@ -15,8 +15,89 @@ import torch
 from . import common
 import torchvision.transforms.v2
 import math
+from PIL import Image
 
+class Quantize(torch.nn.Module):
+    def __init__(self, num_bins=4):
+        super().__init__()
+        self.bin_value = 255 // num_bins
 
+    
+    def forward(self, img, bboxes=None, labels=None):
+        # pil to array
+        img = np.array(img)
+
+        # make img's value be fixed values
+        # img = img // self.bin_value * self.bin_value
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        img[img>=200] = 255
+        img[img<50] = 0
+
+        # array to pil
+        img = Image.fromarray(img)
+
+        return img
+
+class NormalizeContrast(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    
+    def forward(self, img, bboxes=None, labels=None):
+        # pil to array
+        img = np.array(img)
+
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        # make img's value be fixed values
+        img = cv2.normalize(img, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+
+        # array to pil
+        img = Image.fromarray(img)
+
+        return img
+
+class Zscore(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    
+    def forward(self, img, bboxes=None, labels=None):
+        # pil to array
+        img = np.array(img)
+        
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        img = img.astype(np.float32) / 255
+        img = (img - np.mean(img)) / (np.std(img) + 1e-8)
+        img = (img - np.min(img)) / (np.max(img) - np.min(img) + 1e-8) * 255
+        img = img.astype(np.uint8)
+        # make img's value be fixed values
+        
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+
+        # array to pil
+        img = Image.fromarray(img)
+
+        return img
+
+class AdaptiveNormalize(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        pass
+
+    def forward(self, img):
+        img = np.array(img)
+        
+        lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+        lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+        img = cv2.cvtColor(img, cv2.COLOR_LAB2RGB)
+
+        # array to pil
+        img = Image.fromarray(img)
+
+        return img       
+    
 class AutoEncoderViT(torch.nn.Module):
     def __init__(
             self, backbone_name: str = "vit_small_patch16_dinov3.lvd1689m",
@@ -600,6 +681,17 @@ class ViTPatchcore(torch.nn.Module):
             intermediates  = self.forward_backbone(x)
             pass
 
+        # blur
+        # for i, emb in enumerate(intermediates):
+        #     b, n, c = emb.shape
+        #     h = w = int(math.sqrt(n))
+        #     assert h*w == n, f"n={n} is not a perfect square"
+        #     emb = emb.reshape(b, h, w, c).permute(0, 3, 1, 2)
+        #     # gaussian blur
+        #     emb = torch.nn.functional.gaussian_blur(emb, kernel_size=(5, 5), sigma=(5.0, 5.0))
+        #     emb = emb.permute(0, 2, 3, 1).reshape(b, n, c)
+        #     intermediates[i] = emb
+        #     pass
         return intermediates
         pass
     
@@ -687,7 +779,8 @@ class ViTPatchcore(torch.nn.Module):
         transforms = torchvision.transforms.v2.Compose([
             torchvision.transforms.v2.ToPILImage(),
             torchvision.transforms.v2.Resize((self.image_size, self.image_size)),
-            torchvision.transforms.v2.GaussianBlur(kernel_size=3, sigma=1.0),
+            NormalizeContrast(),
+            torchvision.transforms.v2.GaussianBlur(kernel_size=5, sigma=1.0),
             torchvision.transforms.v2.ToTensor(),
             torchvision.transforms.v2.Normalize(
                 mean=[0.485, 0.456, 0.406],
