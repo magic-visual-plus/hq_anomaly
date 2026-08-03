@@ -31,10 +31,10 @@ def valid(model: ViTPatchcore, folder: str):
             images = images.to(model.device)
             preds = model.forward(images)
             dist, idx = model.compute_distance(preds)
-            scores = model.compute_anomaly_score(preds, dist, idx, num_neighbours=9)
+            # scores = model.compute_anomaly_score(preds, dist, idx, num_neighbours=9)
             pass
         ground_truths.extend(label_names)
-        dists.extend([d.cpu().numpy() for d in scores])
+        dists.extend([d.cpu().numpy().max() for d in dist])
         pass
     
     ground_truths = [1 if gt != "good" else 0 for gt in ground_truths]
@@ -43,8 +43,21 @@ def valid(model: ViTPatchcore, folder: str):
     min_ng_dist = np.min(ng_dist)
     max_ng_dist = np.max(ng_dist)
     # find dist that smaller min_ng_dist
-    max_ok_dist = np.max(
-        [dists[i] for i in range(len(dists)) if ground_truths[i] == 0 and dists[i] < min_ng_dist])
+
+    ground_truths = np.asarray(ground_truths)
+    dists = np.asarray(dists)
+    mask_ok = np.asarray(ground_truths) == 0
+    mask_less_min_ng = np.asarray(dists) < min_ng_dist
+    mask_ok_and_less_min_ng = mask_ok & mask_less_min_ng
+    if np.any(mask_ok_and_less_min_ng):
+        max_ok_dist = np.max(dists[mask_ok_and_less_min_ng])
+        pass
+    else:
+        # no ok sample less than minimal ng sample
+        # so we choose the minimal ng sample
+        max_ok_dist = min_ng_dist - 1e-8
+        pass
+
     middle_dist = 0.5 * (min_ng_dist + max_ok_dist)
     
     predict_scores = model.distance2proba((middle_dist, max_ng_dist), np.asarray(dists))

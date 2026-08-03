@@ -637,12 +637,8 @@ class ViTPatchcore(torch.nn.Module):
                 self.layer_indices = data.get("layer_indices", layer_indices)
                 self.memory_size = data.get("memory_size", memory_size)
                 self.backbone_name = data.get("backbone_name", backbone_name)
-                self.backbone = timm.create_model(
-                    self.backbone_name, pretrained=False, num_classes=0, dynamic_img_size=True)
             else:
                 print(backbone_name)
-                self.backbone = timm.create_model(
-                    backbone_name, pretrained=True, num_classes=0, dynamic_img_size=True)
                 # print(self.state_dict().keys())
                 # exit(-1)
                 self.image_size = image_size
@@ -651,6 +647,23 @@ class ViTPatchcore(torch.nn.Module):
                 self.backbone_name = backbone_name
                 pass
             pass
+        else:
+            raise RuntimeError("model_config is None")
+
+        timm_args = {
+            "model_name": self.backbone_name,
+            "pretrained": True,
+            "num_classes": 0,
+        }
+
+        if self.backbone_name.startswith("vit_"):
+            timm_args["dynamic_img_size"] = True
+        elif self.backbone_name.startswith("wide_resnet"):
+            pass
+        else:
+            raise RuntimeError(f"backbone_name {self.backbone_name} is not supported")
+        
+        self.backbone = timm.create_model(**timm_args)
 
         dim = self.backbone.num_features
         self.memories = torch.nn.ModuleList(
@@ -675,12 +688,18 @@ class ViTPatchcore(torch.nn.Module):
     def forward_backbone(self, x: torch.Tensor) -> torch.Tensor:
         # forward pass
         intermediates = self.backbone.forward_intermediates(x)[1]
-        
-        intermediates = [
-            emb.permute(0, 2, 3, 1).reshape(emb.shape[0], -1, emb.shape[1]) for emb in intermediates
-        ]
 
-        return intermediates
+        embs = []
+        for i, emb in enumerate(intermediates):
+            if emb.shape[-1] * emb.shape[-2] > 1024:
+                # downsample
+                emb = torch.nn.functional.interpolate(emb, size=(32, 32), mode="bilinear", align_corners=False)
+                pass
+            emb = emb.permute(0, 2, 3, 1).reshape(emb.shape[0], -1, emb.shape[1])
+            embs.append(emb)
+            pass
+
+        return embs
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
@@ -742,7 +761,7 @@ class ViTPatchcore(torch.nn.Module):
 
     def postprocess(self, forward_result, num_neighbours=1):
         max_dist, max_idx = self.compute_distance(forward_result)
-        score = self.compute_anomaly_score(forward_result, max_dist, max_idx, num_neighbours=9)
+        # score = self.compute_anomaly_score(forward_result, max_dist, max_idx, num_neighbours=9)
         score = torch.sigmoid((score - self.middle_distance) * self.scale_distance)
         # use sigmoid
         # proba = torch.sigmoid((max_dist - self.middle_distance) * self.scale_distance)
@@ -880,10 +899,12 @@ class ViTPatchcore(torch.nn.Module):
         return results
 
 
-    def compute_stats(self, ):
-        for memory in self.memories:
-            memory.compute_stats()
-            pass
+    def compute_stats(self, i):
+        self.memories[i].compute_stats()
+        pass
+
+    def update_stats(self, embeddings, i):
+        self.memories[i].update_stats(embeddings)
         pass
 
     def save(self, checkpoint_path):

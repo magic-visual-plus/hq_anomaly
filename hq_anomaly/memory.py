@@ -9,8 +9,10 @@ class MemoryBank(torch.nn.Module):
         self.max_size = max_size
         self.size = size
         self.register_buffer("memory_bank", torch.zeros((size, dim), dtype=torch.float32))
-        self.register_buffer("dist_mean", torch.tensor(0.0))
-        self.register_buffer("dist_std", torch.tensor(1.0))
+        # self.register_buffer("dist_mean", torch.zeros((size,), dtype=torch.float32))
+        # self.register_buffer("dist_std", torch.zeros((size,), dtype=torch.float32))
+        # self.register_buffer("dist_sum", torch.zeros((size,), dtype=torch.float32))
+        # self.register_buffer("dist_count", torch.zeros((size,), dtype=torch.float32))
         self.min_dist = 0
         self.memories = []
         self.device = torch.device(device)
@@ -49,21 +51,34 @@ class MemoryBank(torch.nn.Module):
             pass
         pass
 
-    def compute_stats(self,):
+    def compute_stats(self, ):
         batch_size = 8
-        dist_sum = 0.0
-        dist2_sum = 0.0
+
+        dists = []
         for i in range(0, self.memory_bank.shape[0], batch_size):
             batch_embeddings = self.memory_bank[i:i+batch_size]
             dist = torch.cdist(batch_embeddings, self.memory_bank)
-            dist_sum += dist.sum().item()
-            dist2_sum += (dist ** 2).sum().item()
+            # set self to inf
+            column_start = i
+            dist[torch.arange(batch_embeddings.shape[0]), torch.arange(column_start, column_start + batch_embeddings.shape[0])] = 1e6
+            dist = torch.topk(dist, k=5, dim=1, largest=False)[0]
+            dists.append(dist.mean(dim=1))
             pass
 
-        dist_mean = dist_sum / (self.memory_bank.shape[0] ** 2)
-        dist_std = ((dist2_sum / (self.memory_bank.shape[0] ** 2)) - dist_mean ** 2) ** 0.5
-        self.dist_mean = torch.tensor(dist_mean)
-        self.dist_std = torch.tensor(dist_std)
+        self.dist_mean = torch.cat(dists, dim=0)
+        pass
+
+    def update_stats(self, embeddings, ):
+        batch_size = 8
+        dists = []
+        for i in range(0, embeddings.shape[0], batch_size):
+            batch_embeddings = embeddings[i:i+batch_size]
+            dist = torch.cdist(batch_embeddings, self.memory_bank)
+
+            min_dist, idx = torch.min(dist, dim=1)
+            self.dist_sum[idx] += min_dist
+            self.dist_count[idx] += 1
+            pass
         pass
 
     def compute_min_distance(self, embeddings):
@@ -77,6 +92,9 @@ class MemoryBank(torch.nn.Module):
             dist = torch.cdist(batch_embeddings, self.memory_bank, compute_mode="donot_use_mm_for_euclid_dist")
             dist, idx = torch.min(dist, dim=1)
 
+            # normalize the dist
+            # dist = dist / self.dist_mean[idx]
+            
             dists.append(dist)
             indices.append(idx)
             pass
@@ -108,7 +126,7 @@ class MemoryBank(torch.nn.Module):
             dist = torch.cdist(batch_embeddings, self.memory_bank)
             # set self to inf
             column_start = i
-            dist[torch.arange(batch_embeddings.shape[0]), torch.arange(column_start, column_start + batch_embeddings.shape[0])] = 1e-6
+            dist[torch.arange(batch_embeddings.shape[0]), torch.arange(column_start, column_start + batch_embeddings.shape[0])] = 1e6
             dist = torch.min(dist, dim=1)[0]
             dists.append(dist)
             pass

@@ -26,20 +26,15 @@ def train(config: common.TrainConfig):
     device = torch.device(f"cuda:{config.devices[0]}" if torch.cuda.is_available() else "cpu")
     rank = 0
 
-    # data loader
-    transforms = torchvision.transforms.Compose([
-        torchvision.transforms.ToPILImage(),
-        torchvision.transforms.Resize((image_size, image_size)),
-        torchvision.transforms.GaussianBlur(kernel_size=3, sigma=1.0),
-        torchvision.transforms.ToTensor(),
-        torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                         std=[0.229, 0.224, 0.225]),
-    ])
     train_path = os.path.join(data_path, 'train', 'good')
     valid_path = os.path.join(data_path, 'val')
-    
+
+    model = create_model(config.modelConfig)
+    model.to(device)
+    model.train()
+
     train_dataset = ImageSingleFolder(
-        folder=train_path, transform=transforms)
+        folder=train_path, transform=model.get_default_transforms())
 
     train_loader = torch.utils.data.DataLoader(
         dataset=train_dataset,
@@ -47,10 +42,6 @@ def train(config: common.TrainConfig):
         num_workers=config.num_data_workers,
         sampler=torch.utils.data.DistributedSampler(train_dataset) if torch.distributed.is_initialized() else torch.utils.data.RandomSampler(train_dataset),
     )
-
-    model = create_model(config.modelConfig)
-    model.to(device)
-    model.train()
 
     os.makedirs(config.output_path, exist_ok=True)
     for i_epoch in range(len(model.layer_indices)):
@@ -70,8 +61,19 @@ def train(config: common.TrainConfig):
             #     break
             pass
         model.shrink_memory(i_epoch)
+        # model.compute_stats(i_epoch)
+        # for i_batch, images in enumerate(bar):
+        #     images = images.to(device)
+        #     forward_result = model(images)
+        #     model.update_stats(forward_result[model.layer_indices[i_epoch]], i_epoch)
+
+        #     # if i_batch > 10:
+        #     #     break
+        #     pass
         pass
     # model.load("output/ckpt.pth")
+
+
     
     dist_stats, confidence, accuracy, f1_score, precision, recall, precision_recall_curve = valid_patchcore.valid(model, folder=valid_path)
     model.set_distance_stats(dist_stats)
@@ -103,9 +105,11 @@ if __name__ == "__main__":
         num_epochs=200,
         num_data_workers=16,
         modelConfig=common.ModelConfig(
-            image_size=512,
+            image_size=256,
             layer_indices=[1],
             memory_size=100000,
+            backbone_name="vit_base_patch16_dinov3.lvd1689m",
+            # backbone_name="wide_resnet50_2.racm_in1k",
         ),
     )
     train(train_config)
