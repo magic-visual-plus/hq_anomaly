@@ -1,11 +1,12 @@
 
 import torchvision.datasets
 import torch
-from . import common
-from .models import ViTPatchcore
+from hq_anomaly import common
+from hq_anomaly.models import ViTPatchcore
 from tqdm import tqdm
 import sklearn.metrics
 import numpy as np
+import sys
 
 
 def valid(model: ViTPatchcore, folder: str):
@@ -23,12 +24,14 @@ def valid(model: ViTPatchcore, folder: str):
 
     ground_truths = []
     dists = []
+
     for i, (images, labels) in enumerate(tqdm(valid_loader)):
         label_names = [valid_dataset.classes[label] for label in labels]
         with torch.no_grad():
             images = images.to(model.device)
             preds = model.forward(images)
-            dist = model.compute_distance(preds)
+            dist, idx = model.compute_distance(preds)
+            # scores = model.compute_anomaly_score(preds, dist, idx, num_neighbours=9)
             pass
         ground_truths.extend(label_names)
         dists.extend([d.cpu().numpy().max() for d in dist])
@@ -40,8 +43,21 @@ def valid(model: ViTPatchcore, folder: str):
     min_ng_dist = np.min(ng_dist)
     max_ng_dist = np.max(ng_dist)
     # find dist that smaller min_ng_dist
-    max_ok_dist = np.max(
-        [dists[i] for i in range(len(dists)) if ground_truths[i] == 0 and dists[i] < min_ng_dist])
+
+    ground_truths = np.asarray(ground_truths)
+    dists = np.asarray(dists)
+    mask_ok = np.asarray(ground_truths) == 0
+    mask_less_min_ng = np.asarray(dists) < min_ng_dist
+    mask_ok_and_less_min_ng = mask_ok & mask_less_min_ng
+    if np.any(mask_ok_and_less_min_ng):
+        max_ok_dist = np.max(dists[mask_ok_and_less_min_ng])
+        pass
+    else:
+        # no ok sample less than minimal ng sample
+        # so we choose the minimal ng sample
+        max_ok_dist = min_ng_dist - 1e-8
+        pass
+
     middle_dist = 0.5 * (min_ng_dist + max_ok_dist)
     
     predict_scores = model.distance2proba((middle_dist, max_ng_dist), np.asarray(dists))
@@ -62,7 +78,15 @@ def valid(model: ViTPatchcore, folder: str):
 
     precision_curve, recall_curve, _ = sklearn.metrics.precision_recall_curve(ground_truths, predict_scores)
 
-    return (middle_dist, max_ng_dist), confidence, accuracy, f1_score, precision, recall, (precision_curve, recall_curve)
+    returns = (middle_dist, max_ng_dist), confidence, accuracy, f1_score, precision, recall, (precision_curve, recall_curve)
+    print(returns)
+    return returns
 
 if __name__ == "__main__":
+    model = ViTPatchcore(
+        model_config=common.ModelConfig(
+            checkpoint_path=sys.argv[1]
+        )
+    )
+    valid(model, sys.argv[2])
     pass
