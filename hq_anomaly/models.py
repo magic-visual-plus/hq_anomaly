@@ -655,6 +655,9 @@ class ViTPatchcore(torch.nn.Module):
             "pretrained": True,
             "num_classes": 0,
         }
+        if len(model_config.checkpoint_path) > 0:
+            timm_args["pretrained"] = False
+            pass
 
         if self.backbone_name.startswith("vit_"):
             timm_args["dynamic_img_size"] = True
