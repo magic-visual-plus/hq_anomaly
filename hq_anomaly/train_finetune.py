@@ -1,0 +1,146 @@
+import torch
+import torch.distributed
+import torchvision.datasets 
+import torchvision.transforms
+import os
+from hq_anomaly import common
+from hq_anomaly import models
+import sys
+from tqdm import tqdm
+import numpy as np
+from hq_anomaly import valid_patchcore
+from hq_anomaly.datasets import ImageSingleFolder
+
+
+def create_model(config: common.ModelConfig) -> torch.nn.Module:
+    # model = models.AutoEncoderViT()
+    # config.layer_indices = [1,3]
+    model = models.ViTWithMemoryBank(model_config=config)
+    return model
+
+
+def train_coreset(train_loader, model: models.ViTWithMemoryBank, rank, device):
+    for i_layer_idx in range(len(model.layer_indices)):
+        if rank == 0:
+            bar = tqdm(train_loader)
+        else:
+            bar = train_loader
+            pass
+
+        # model.set_require_grad_(i_epoch)
+        for i_batch, images in enumerate(bar):
+            images = images.to(device)
+            forward_result = model(images)
+            model.add_memory(forward_result, i_layer_idx)
+
+            pass
+        model.shrink_memory(i_layer_idx)
+        pass
+    pass
+
+
+def finetune(train_loader, model: models.ViTWithMemoryBank, rank, device, num_epochs):
+    optimizer = torch.optim.AdamW(model.get_param_dict(1e-5))
+    lr_scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=1.0, total_iters=num_epochs,
+            end_factor=1e-6 / 1e-5
+        )
+    for iepoch in range(num_epochs):
+        if rank == 0:
+            bar = tqdm(train_loader)
+        else:
+            bar = train_loader
+            pass
+
+        losses = []
+        for i_batch, images in enumerate(bar):
+            images = images.to(device)
+            forward_result = model(images)
+            loss = model.compute_loss(forward_result)
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            optimizer.step()
+
+            if rank == 0:
+                losses.append(loss.item())
+                bar.set_postfix({"loss": f"{np.mean(losses):.4f}"})
+                pass
+            pass
+        
+        lr_scheduler.step()
+        pass
+
+def train(config: common.TrainConfig):
+    image_size = config.modelConfig.image_size
+    data_path = config.data_path
+
+    print("Not using distributed training")
+    device = torch.device(f"cuda:{config.devices[0]}" if torch.cuda.is_available() else "cpu")
+    rank = 0
+
+    train_path = os.path.join(data_path, 'train', 'good')
+    valid_path = os.path.join(data_path, 'val')
+
+    model = create_model(config.modelConfig)
+    model.to(device)
+    model.train()
+
+    train_dataset = ImageSingleFolder(
+        folder=train_path, transform=model.get_default_transforms())
+
+    train_loader = torch.utils.data.DataLoader(
+        dataset=train_dataset,
+        batch_size=config.batch_size,
+        num_workers=config.num_data_workers,
+        sampler=torch.utils.data.DistributedSampler(train_dataset) if torch.distributed.is_initialized() else torch.utils.data.RandomSampler(train_dataset),
+    )
+
+    os.makedirs(config.output_path, exist_ok=True)
+
+    train_coreset(train_loader, model, rank, device)
+
+    model.set_train_backbone(True)
+    finetune(train_loader, model, rank, device, config.num_epochs)
+
+    model.eval()
+    dist_stats, confidence, accuracy, f1_score, precision, recall, precision_recall_curve = valid_patchcore.valid(model, folder=valid_path)
+    model.set_distance_stats(dist_stats)
+
+    model.save(os.path.join(config.output_path, "ckpt.pth"))
+    print(f"middle_dist: {dist_stats}, accuracy: {accuracy}, f1_score: {f1_score}, precision: {precision}, recall: {recall}")
+    results_filename = os.path.join(config.output_path, "results.csv")
+
+    with open(results_filename, 'w') as fout:
+        # write header
+        fout.write("confidence,accuracy,f1_score,precision,recall\n")
+        fout.write(f"{confidence},{accuracy},{f1_score},{precision},{recall}\n")
+        pass
+    precision_recall_curve_filename = os.path.join(config.output_path, "pr_curve_metric.csv")
+    with open(precision_recall_curve_filename, 'w') as fout:
+        # write header
+        fout.write("px,all\n")
+        for p, r in zip(precision_recall_curve[1], precision_recall_curve[0]):
+            fout.write(f"{p:.4f},{r:.4f}\n")
+            pass
+        pass
+
+
+
+if __name__ == "__main__":
+    train_config = common.TrainConfig(
+        data_path=sys.argv[1],
+        batch_size=54,
+        num_epochs=5,
+        num_data_workers=16,
+        modelConfig=common.ModelConfig(
+            image_size=256,
+            layer_indices=[3],
+            memory_size=20000,
+            backbone_name="vit_base_patch16_dinov3.lvd1689m",
+            # backbone_name="wide_resnet50_2.racm_in1k",
+        ),
+    )
+    train(train_config)
+    pass
