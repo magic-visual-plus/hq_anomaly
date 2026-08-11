@@ -928,7 +928,7 @@ class ViTPatchcore(torch.nn.Module):
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
         if "state_dict" in checkpoint:
             state_dict = checkpoint["state_dict"]
-            self.load_state_dict(state_dict, strict=True)
+            self.load_state_dict(state_dict, strict=False)
             pass
         else:
             # according to old version, directly load state dict
