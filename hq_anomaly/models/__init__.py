@@ -656,6 +656,9 @@ class ViTPatchcore(torch.nn.Module):
             "pretrained": True,
             "num_classes": 0,
         }
+        if len(model_config.checkpoint_path) > 0:
+            timm_args["pretrained"] = False
+            pass
 
         if self.backbone_name.startswith("vit_"):
             timm_args["dynamic_img_size"] = True
@@ -762,7 +765,9 @@ class ViTPatchcore(torch.nn.Module):
 
     def postprocess(self, forward_result, num_neighbours=1):
         max_dist, max_idx = self.compute_distance(forward_result)
+        # max_dist: [batch, num_patches], max_idx: [batch, num_patches]
         # score = self.compute_anomaly_score(forward_result, max_dist, max_idx, num_neighbours=9)
+        score = max_dist.max(dim=-1)[0]
         score = torch.sigmoid((score - self.middle_distance) * self.scale_distance)
         # use sigmoid
         # proba = torch.sigmoid((max_dist - self.middle_distance) * self.scale_distance)
@@ -924,7 +929,7 @@ class ViTPatchcore(torch.nn.Module):
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
         if "state_dict" in checkpoint:
             state_dict = checkpoint["state_dict"]
-            self.load_state_dict(state_dict, strict=True)
+            self.load_state_dict(state_dict, strict=False)
             pass
         else:
             # according to old version, directly load state dict
