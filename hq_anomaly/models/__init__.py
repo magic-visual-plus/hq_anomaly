@@ -7,15 +7,16 @@ import copy
 import torch.distributed
 from functools import partial
 from timm.models.layers import LayerNorm
-from .memory import MemoryBank
+from hq_anomaly.memory import MemoryBank
 import numpy as np
 from typing import List
 import cv2
 import torch
-from . import common
+from hq_anomaly import common
 import torchvision.transforms.v2
 import math
 from PIL import Image
+from .vit_with_memory_bank import ViTWithMemoryBank
 
 class Quantize(torch.nn.Module):
     def __init__(self, num_bins=4):
