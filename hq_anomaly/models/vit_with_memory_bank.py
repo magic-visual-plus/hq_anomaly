@@ -163,6 +163,7 @@ class ViTWithMemoryBank(torch.nn.Module):
     def postprocess(self, forward_result, num_neighbours=1):
         max_dist, max_idx = self.compute_distance(forward_result)
         # score = self.compute_anomaly_score(forward_result, max_dist, max_idx, num_neighbours=9)
+        score = max_dist.max(dim=-1)[0]
         score = torch.sigmoid((score - self.middle_distance) * self.scale_distance)
         # use sigmoid
         # proba = torch.sigmoid((max_dist - self.middle_distance) * self.scale_distance)
