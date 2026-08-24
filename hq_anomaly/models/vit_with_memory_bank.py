@@ -49,6 +49,9 @@ class ViTWithMemoryBank(torch.nn.Module):
             "pretrained": True,
             "num_classes": 0,
         }
+        if len(model_config.checkpoint_path) > 0:
+            timm_args["pretrained"] = False
+            pass
         self.temperature = 0.1
 
         if self.backbone_name.startswith("vit_"):
