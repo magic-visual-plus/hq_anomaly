@@ -773,7 +773,8 @@ class ViTPatchcore(torch.nn.Module):
         # proba = torch.sigmoid((max_dist - self.middle_distance) * self.scale_distance)
         min_max_dist = max_dist.min(dim=-1, keepdim=True)[0]
         max_max_dist = max_dist.max(dim=-1, keepdim=True)[0]
-        proba = (max_dist - min_max_dist) / (max_max_dist - min_max_dist + 1e-8)
+        # proba = (max_dist - min_max_dist) / (max_max_dist - min_max_dist + 1e-8)
+        proba = torch.sigmoid((max_dist - self.middle_distance) * self.scale_distance)
 
         return proba, score
 
@@ -882,12 +883,7 @@ class ViTPatchcore(torch.nn.Module):
         embedding_h = int(math.sqrt(preds.shape[1]))
         assert embedding_h * embedding_h == preds.shape[1], "Embedding size is not a perfect square"
         for original_size, pred, score in zip(original_sizes, preds, scores):
-            pred = pred.cpu().numpy()
             score = score.cpu().numpy()
-            pred = pred.reshape(embedding_h, embedding_h)
-
-            pred = cv2.resize(
-                pred, (original_size[1], original_size[0]))
             prediction = common.PredictionResult(score=score)
             results.append(prediction)
             pass
@@ -896,10 +892,11 @@ class ViTPatchcore(torch.nn.Module):
             for i in range(len(results)):
                 pred = preds[i].cpu().numpy()
                 pred = pred.reshape(embedding_h, embedding_h)
-                pred = cv2.resize(
+                pred_resize = cv2.resize(
                     pred, (original_sizes[i][1], original_sizes[i][0]))
                 results[i].heat_map = self.generate_heatmap(
-                    pred, imgs[i])
+                    pred_resize, imgs[i])
+                results[i].score_map = pred
                 pass
             
         return results
@@ -1137,11 +1134,6 @@ class ViTPatchcore2(torch.nn.Module):
         preds = preds.squeeze(-1)
         results = []
         for original_size, pred in zip(original_sizes, preds):
-            pred = pred.cpu().numpy()
-            pred = pred.reshape(32, 32)
-
-            pred = cv2.resize(
-                pred, (original_size[1], original_size[0]))
             prediction = common.PredictionResult(score=pred)
             results.append(prediction)
             pass

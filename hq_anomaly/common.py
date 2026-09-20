@@ -40,3 +40,4 @@ class PredictionResult(pydantic.BaseModel):
         pass
     score: np.ndarray
     heat_map: Optional[np.ndarray] = None
+    score_map: Optional[np.ndarray] = None
