@@ -165,6 +165,7 @@ class ViTWithMemoryBank(torch.nn.Module):
 
     def postprocess(self, forward_result, num_neighbours=1):
         max_dist, max_idx = self.compute_distance(forward_result)
+        # max_dist: [batch, num_patches], max_idx: [batch, num_patches]
         # score = self.compute_anomaly_score(forward_result, max_dist, max_idx, num_neighbours=9)
         score = max_dist.max(dim=-1)[0]
         score = torch.sigmoid((score - self.middle_distance) * self.scale_distance)
@@ -172,7 +173,8 @@ class ViTWithMemoryBank(torch.nn.Module):
         # proba = torch.sigmoid((max_dist - self.middle_distance) * self.scale_distance)
         min_max_dist = max_dist.min(dim=-1, keepdim=True)[0]
         max_max_dist = max_dist.max(dim=-1, keepdim=True)[0]
-        proba = (max_dist - min_max_dist) / (max_max_dist - min_max_dist + 1e-8)
+        # proba = (max_dist - min_max_dist) / (max_max_dist - min_max_dist + 1e-8)
+        proba = torch.sigmoid((max_dist - self.middle_distance) * self.scale_distance)
 
         return proba, score
 
@@ -267,10 +269,11 @@ class ViTWithMemoryBank(torch.nn.Module):
             for i in range(len(results)):
                 pred = preds[i].cpu().numpy()
                 pred = pred.reshape(embedding_h, embedding_h)
-                pred = cv2.resize(
+                pred_resize = cv2.resize(
                     pred, (original_sizes[i][1], original_sizes[i][0]))
                 results[i].heat_map = self.generate_heatmap(
-                    pred, imgs[i])
+                    pred_resize, imgs[i])
+                results[i].score_map=pred
                 pass
             
         return results
